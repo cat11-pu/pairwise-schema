@@ -199,7 +199,7 @@ def _report(problems, path, code):
 
 def _is_present(document, name):
     """这个字段是不是真的写在文档里了。"""
-    return document.get(name) is not None
+    return name in document
 
 
 def _unknown_policy(spec):
@@ -230,7 +230,7 @@ def _normalize_object(document, spec, path, problems):
             normalized[name] = _clone(document[name])
         elif policy == "drop":
             continue
-        elif spec.unknown == "reject":
+        else:
             _report(problems, _join(path, name), "unknown_field")
     for name, field in spec.fields.items():
         child_path = _join(path, name)
@@ -238,10 +238,7 @@ def _normalize_object(document, spec, path, problems):
             if field.required:
                 _report(problems, child_path, "missing")
             elif field.default is not _NO_DEFAULT:
-                normalized[name] = field.default
-            continue
-        if field.kind == "object":
-            normalized[name] = _clone(document[name])
+                normalized[name] = _clone(field.default)
             continue
         value = _normalize(document[name], field, child_path, problems)
         if value is not None:
@@ -254,13 +251,14 @@ def _normalize_list(document, spec, path, problems):
     if not isinstance(document, list):
         _report(problems, path, "type")
         return None
-    if spec.min_len is not None and len(document) <= spec.min_len:
+    if spec.min_len is not None and len(document) < spec.min_len:
         _report(problems, path, "too_short")
     if spec.max_len is not None and len(document) > spec.max_len:
         _report(problems, path, "too_long")
     items = []
-    for item in document:
-        items.append(_normalize(item, spec.item, path, problems))
+    for index, item in enumerate(document):
+        items.append(_normalize(item, spec.item,
+                                "%s[%d]" % (path, index), problems))
     return items
 
 
@@ -271,9 +269,14 @@ def _coerce_int(value):
     if isinstance(value, int):
         return value
     if isinstance(value, str):
-        digits = value.lstrip("+-")
-        if digits.isdigit():
-            return int(digits)
+        text = value
+        sign = 1
+        if text[:1] in ("+", "-"):
+            if text[0] == "-":
+                sign = -1
+            text = text[1:]
+        if text and all(char in "0123456789" for char in text):
+            return sign * int(text)
     return None
 
 
@@ -312,7 +315,7 @@ def _finalize(problems):
     unique = []
     seen = set()
     for problem in sorted(problems, key=lambda item: (item.path, item.code)):
-        key = problem.code
+        key = (problem.path, problem.code)
         if key in seen:
             continue
         seen.add(key)
